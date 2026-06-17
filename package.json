@@ -1,5 +1,5 @@
 {
-  "name": "shopee-product-worker",
+  "name": "product-worker",
   "version": "0.0.0",
   "private": true,
   "scripts": {

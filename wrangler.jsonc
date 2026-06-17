@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "shopee-product-worker",
+	"name": "product-worker",
 	"main": "src/index.js",
 	"compatibility_date": "2026-06-16",
 	"observability": {
