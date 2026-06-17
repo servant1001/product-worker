@@ -112,7 +112,13 @@ function parseSheep100LoveProduct(productUrl, html) {
   const name = cleanSheepTitle(title);
   const imageUrl = getProductImageUrl(html, productUrl);
   const isbn = getMatch(text, /ISBN\D*([0-9Xx-]+)/i);
-  const variants = parseSheepVariants(html, productUrl, imageUrl);
+  const variantImageMap = parseSheepVariantImageMap(html);
+  const variants = parseSheepVariants(
+    html,
+    productUrl,
+    imageUrl,
+    variantImageMap
+  );
   const { price, sellingPrice } = getSheepBasePrice(html, variants);
 
   return {
@@ -123,36 +129,132 @@ function parseSheep100LoveProduct(productUrl, html) {
     imageUrl,
     website: productUrl,
     source: "sheep100love",
-    variants,
+    variants
   };
 }
 
-function parseSheepVariants(html, productUrl, fallbackImageUrl) {
-  const specsBlock = getMatch(html, /var\s+specs\s*=\s*(\[[\s\S]*?\]);/i);
+function parseSheepVariantImageMap(html) {
+  const map = new Map();
+
+  const pattern =
+    /{\s*id:\s*\d+,\s*name:\s*['"]([^'"]+)['"],[\s\S]*?spec_ids:\s*\[([\s\S]*?)\],[\s\S]*?slide_index:\s*\d+\s*,?\s*}/g;
+
+  let match;
+  while ((match = pattern.exec(html))) {
+    const rawImagePath = (match[1] || "").trim();
+    const specIdsBlock = match[2] || "";
+
+    const specIds = [...specIdsBlock.matchAll(/['"](\d+)['"]/g)].map(
+      (m) => m[1]
+    );
+
+    if (!specIds.length) continue;
+
+    const imageUrl = toSheepProductImageUrl(rawImagePath);
+    if (!imageUrl) continue;
+
+    for (const specId of specIds) {
+      if (!map.has(specId)) {
+        map.set(specId, imageUrl);
+      }
+    }
+  }
+
+  return map;
+}
+
+function toSheepProductImageUrl(path) {
+  const value = decodeHtml(String(path || ""))
+    .replace(/\\\//g, "/")
+    .trim();
+
+  if (!value) return "";
+
+  if (/^https?:\/\//i.test(value)) {
+    return value;
+  }
+
+  if (value.startsWith("/")) {
+    return `https://shopstore-image.pages.dev/upload${value}`;
+  }
+
+  return `https://shopstore-image.pages.dev/upload/${value}`;
+}
+
+function parseSheepVariants(
+  html,
+  productUrl,
+  fallbackImageUrl,
+  variantImageMap = new Map()
+) {
+  const specsBlock = getMatch(
+    html,
+    /var\s+specs\s*=\s*(\[[\s\S]*?\]);/i
+  );
+
   if (!specsBlock) return [];
 
   const variants = [];
+
   const objectPattern =
     /{\s*id:\s*(\d+),[\s\S]*?sku:\s*"([^"]*)"|{\s*id:\s*(\d+),[\s\S]*?sku:\s*'([^']*)'/g;
 
   let match;
+
   while ((match = objectPattern.exec(specsBlock))) {
     const startIndex = match.index;
     const objectText = readJsObject(specsBlock, startIndex);
-    if (!objectText) continue;
 
-    const id = toNumber(getMatch(objectText, /id:\s*(\d+)/i));
+    if (!objectText) {
+      objectPattern.lastIndex = startIndex + 1;
+      continue;
+    }
+
+    const id = toNumber(
+      getMatch(objectText, /id:\s*(\d+)/i)
+    );
+
     const sku = getQuotedValue(objectText, "sku");
-    const price = toNumber(getQuotedValue(objectText, "price"));
-    const specialPrice = toNumber(getQuotedValue(objectText, "special_price"));
-    const quantity = toNumber(getQuotedValue(objectText, "quantity"));
-    const sizeName = getQuotedValue(objectText, "size_name");
-    const optionValues = getQuotedValue(objectText, "option_values");
-    const imageUrl = getSheepVariantImageUrl(
+    const price = toNumber(
+      getQuotedValue(objectText, "price")
+    );
+
+    const specialPrice = toNumber(
+      getQuotedValue(objectText, "special_price")
+    );
+
+    const quantity = toNumber(
+      getQuotedValue(objectText, "quantity")
+    );
+
+    const sizeName = getQuotedValue(
+      objectText,
+      "size_name"
+    );
+
+    const optionValues = getQuotedValue(
+      objectText,
+      "option_values"
+    );
+
+    // 先嘗試從規格物件本身取得圖片
+    const directImageUrl = getSheepVariantImageUrl(
       objectText,
       productUrl,
-      fallbackImageUrl
+      ""
     );
+
+    // 再依照規格 ID，從圖片對照表取得圖片
+    const mappedImageUrl =
+      variantImageMap.get(String(id)) ||
+      variantImageMap.get(id) ||
+      "";
+
+    // 規格圖片優先，沒有才使用商品主圖
+    const imageUrl =
+      directImageUrl ||
+      mappedImageUrl ||
+      fallbackImageUrl;
 
     variants.push({
       id,
@@ -165,7 +267,8 @@ function parseSheepVariants(html, productUrl, fallbackImageUrl) {
       imageUrl,
     });
 
-    objectPattern.lastIndex = startIndex + objectText.length;
+    objectPattern.lastIndex =
+      startIndex + objectText.length;
   }
 
   return variants;
